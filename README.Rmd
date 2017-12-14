@@ -1,0 +1,112 @@
+---
+title: "sparklyr Pipeline"
+output: github_document
+---
+
+## Install `sparklyr` from a branch
+
+Use the `feature/ml-pipeline` branch to access the new pipeline features
+```{r}
+devtools::install_github("rstudio/sparklyr")
+```
+
+## Open a local `sparklyr` connection
+
+```{r}
+library(sparklyr)
+sc <- spark_connect(master = "local")
+```
+
+## Copy mtcars and split them for test and training
+
+```{r}
+spark_mtcars <- sdf_copy_to(sc, mtcars, overwrite = TRUE) %>%
+ sdf_partition(training = 0.4, testing = 0.6)
+```
+
+
+## Create the pipeline
+
+Create a new `ml_pipeline()` object, and pass each step as an argument.  The result is a 3 stage pipeline. 
+```{r}
+
+my_pipeline <- ml_pipeline(sc) %>%
+  ft_binarizer("mpg", "guzzler", 20) %>%
+  ft_r_formula(guzzler ~ wt + cyl) %>%
+  ml_logistic_regression()
+
+my_pipeline
+```
+
+
+## Train the model
+
+Use `ml_fit()` to train the model, and save the results to the `model` variable.  
+```{r}
+model <- ml_fit(my_pipeline, spark_mtcars$training)
+
+model
+```
+
+## Evaluate the model
+
+`ml_transform()` would be the equivalent of a `predict()` function.  The command is basically saying take the `spark_mtcars$testing` dataset and "transform" it using this pipeline, which happens to have a modeling step at the end.
+
+```{r}
+predictions <- ml_transform(x = model, 
+                            dataset = spark_mtcars$testing)
+
+
+dplyr::glimpse(predictions)
+```
+
+```{r}
+
+predictions %>%
+  dplyr::group_by(guzzler, prediction) %>%
+  dplyr::tally()
+```
+
+## Save the model
+
+The model can be saved to disk using `ml_save`.
+```{r}
+ml_save(model, "new_model", overwrite = TRUE)
+```
+
+The saved model retains the transformation stages
+```{r}
+list.files("new_model")
+spark_disconnect(sc)
+```
+
+## Reload the model
+
+We will use a new connection to confirm that the model can be reloaded
+
+```{r}
+library(sparklyr)
+sc <- spark_connect(master = "local")
+```
+
+Use `ml_load()` to read the saved model
+
+```{r}
+spark_mtcars <- sdf_copy_to(sc, mtcars, overwrite = TRUE) 
+
+reload <- ml_load(sc, "new_model")
+
+reload
+```
+
+
+```{r}
+reload_predictions <- ml_transform(x = reload, 
+                            dataset = spark_mtcars)
+
+dplyr::glimpse(reload_predictions)
+```
+
+```{r}
+spark_disconnect(sc)
+```
